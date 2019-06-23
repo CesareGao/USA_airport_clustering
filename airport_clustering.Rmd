@@ -1,0 +1,171 @@
+---
+title: "Airport Clustering"
+author: "Yan Gao"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggpubr)
+library(cluster)
+library(factoextra)
+```
+
+## Data loading and formatting
+
+I load the data from JSE data set and formatting the data from fixed width table txt file.
+
+```{r}
+rm(list=ls())
+lines <- readLines("http://jse.amstat.org/datasets/airport.dat.txt")
+
+w <- list(c(1,21), c(22,43), c(44,49), c(51,56), c(58,65), c(67,75), c(77,85))
+ns <- c('Airport','City','Scheduled_departures','Performed_departures','Enplaned_passengers','Enplaned_revenue_tons_of_freight','Enplaned_revenue_tons_of_mail')
+for(i in 1:length(w)) {
+     assign(ns[i], str_trim(substring(lines, w[[i]][1], w[[i]][2])))
+}
+obj.list <- lapply(ns, get)
+names(obj.list) <- ns
+dat <- data.frame(obj.list)
+rm(Airport,City,Scheduled_departures,Performed_departures,Enplaned_passengers,Enplaned_revenue_tons_of_freight,Enplaned_revenue_tons_of_mail,lines,i,w,obj.list)
+```
+
+This is a very standard formatted data frame. No missing value or "dirty" value exist. The only thing we need to modify is the data type of each column.
+
+```{r}
+dat[,1:2] <- as.character(unlist(dat[,1:2]))
+dat[,3:5] <- as.integer(as.character(unlist(dat[,3:5])))
+dat[,6:7] <- as.numeric(as.character(unlist(dat[,6:7])))
+```
+
+## Data source and definitions
+
+SOURCE: U.S. Federal Aviation Administration and Research and Special Programs Administration, 'Airport Activity Statistics' (1990). I find it on http://jse.amstat.org/datasets/airport.dat.txt .
+
+This data set consists of all 135 large and medium sized air hubs in the United States as defined by the Federal Aviation Administration. And it consists with 7 columns:
+
+  (1) Airport: The name of the corresponding air hubs, which is unique for each row.
+  (2) City: The name of city which the air hub belongs to.
+  (3) Scheduled_departures: The number of scheduled departure flights at the air hub.
+  (4) Performed_departures: The number of performed departure flights at the air hub.
+  (5) Enplaned_passengers: The number of enplaned_passengers, which is the most important air traffic metric because the majority of airport revenues are generated directly or indirectly from enplaned passengers.
+  (6) Enplaned_revenue_tons_of_freight: The number of revenue tons of freight loaded on all aircrafts in the air hub including originating and transfer tons.
+  (7) Enplaned_revenue_tons_of_mail: The number of revenue tons of mail loaded on all aircrafts in the air hub including originating and transfer tons.
+  
+A brief description from the data contributor is in link: http://jse.amstat.org/datasets/airport.txt .
+  
+## Main features of dataset
+
+Some features of the dataset are visulized as an exploration of the data.
+
+### Visual check of Scheduled_departures and Performed_departures
+
+```{r}
+lire <- lm(dat$Performed_departures ~ dat$Scheduled_departures)
+g <- ggplot(data=dat,aes(x=Scheduled_departures,y=Performed_departures)) + geom_point() + 
+  geom_abline(intercept = lire$coefficients[1], slope = lire$coefficients[2], colour = 'gray')
+g
+summary(lire)
+```
+
+The relation between the Performed_departures and the Scheduled_departures is pretty linear. There seems no intervention like climates, geography or other factors could affect that dramatically. A slightly systematic decrease could exist. They are similar distributions with a bit shift.
+
+### The dustribution of Enplaned_passengers
+
+As described in column definitions, the enplaned passengers is the most important air traffic metric. I want to look at its distribution to find if there is any pattern indicates that how many clusters should we make.
+
+```{r}
+ggplot(data = dat, aes(x=Enplaned_passengers)) + geom_histogram(aes(y=..density..))
+```
+
+From the plot, I can tell that if the Enplaned_passengers column is used to cluster the air hub sets of large sized and medium size, it's likely to find some boundary with enough distance to achieve that. But it seems more reasonable to cluster this into 3 parts, which could be called medium, medium-large and large.
+
+## Research Question
+
+1. Explore if the Scheduled_departures and Performed_departures are the same distribution.
+
+2. Explore if the data set could be clustered as two parts, large size and medium sized air hub, as the dataset claimed, or more reasonable clustering method could work.
+
+## Research Method
+
+1. For question 1, The strong linearity with R-squared $0.9994 > 0.8$ shows that the two column should have the same distribution.I intend to use the Mann Whitney U test to check whether the distributions of two groups, Scheduled_departures and Performed_departures, have the same mean, or there exists a considerable amount of shift.
+
+2. For question 2, I intend to use hierarchical clustering. Although k-means clustering runs quite faster than hierarchical clustering, it is quite random and could produces different result, which is vague to test appropriate parameters like the number of clusters. The hierarchical clustering is more clear to show the priority of different number clusters and which one is more reasonable.
+
+## Data satisfaction of requirements of method
+
+1. It's obvious that the Scheduled_departures and Performed_departures groups data are quite similar. We can tell this from the plot in the Main Feature section. This indicates that the two groups should have same distribution. So we could apply the Mann Whitney U test here to check if they have the same mean.
+
+2. The hierarchical clustering is not so sensitive with data set size. The most important thing is to determine the contribution of each columns to the distance of each data point. We should not easily just applied the Euclidean distance method as each columns may have different percentage of contributions. So a better way is to define the distance by ourselves.
+
+## Method application and interpration
+
+### The analysis of intervention between Scheduled_departures and Performed_departures
+
+```{r}
+wilcox.test(dat$Scheduled_departures,dat$Performed_departures)
+```
+
+The p-value is much greater than 0.05. So the difference between the two distributions' means is statistically insignificant.
+
+### The analysis of Hierarchical Clustering
+
+Before I implement the hierarchical clustering, we have to merge the influence of some columns which have the same property.
+
+1. The Scheduled_departures and Performed_departures have exactly same distribution, so I only choose the later column to avoid double counting.
+
+2. The Enplaned_passengers, as told before, is the most important metric for scale the size of the air hub and it has no relation with other columns. So I keep it alone.
+
+3. Both the Enplaned_revenue_tons_of_freight and the Enplaned_revenue_tons_of_mail are the revenue been charged by tons. So I add them together to take the total revenue by tons into count.
+
+4. There are same airport names in the Airport column, INTERNATIONAL for example. To treat each airport as unique, I add each city it belongs to to the airport name and set it as the row name.
+
+After building a new dataframe, it turns to determine each column's weight. I haven't found any clues of how to determine the weight of each column. So I just treat them as same scale and use the default Euclidean distance. There should be a way to count the weight. I used to get it by using fuzzy clustering in MATLAB.
+
+```{r}
+dat.cluster <- data.frame( dat$Performed_departures )
+dat.cluster$Enplaned_passengers <- dat$Enplaned_passengers
+dat.cluster$Enplaned_revenue_tons <- dat$Enplaned_revenue_tons_of_freight + dat$Enplaned_revenue_tons_of_mail
+row.names(dat.cluster) <- paste(dat$Airport,dat$City)
+
+df <- scale(dat.cluster) # normalize data
+res.hc <- eclust(df, "hclust",k = 3) # compute hclust
+fviz_dend(res.hc, rect = TRUE) # dendrogam
+```
+
+```{r}
+l1 <- res.hc$cluster[res.hc$cluster == 1]
+names(l1)
+```
+
+The results seem really good. The Cluster Dendrogram shows that, by dividing the air hubs into three clusters, how would each air hub belongs to different clusters. Two clusters method is also acceptable (check this in Appendix section). But the distribution feature of the Enplaned_passengers in Main Features section shows that the clustering could be more informational with 3 clusters.
+
+To confirm that, I print the airport names in the top cluster result. It's easily to check that they are still the biggest airports in USA. Almost all the international travelers will pass one of the airports among them. They are more outstanding than other airports of same cluster in the two clusters implementation. It even matches the result I find on the website ( httpd://.market watch.com/story/this-was-the-busiest-us-airport-in-2018-2019-02-04 ). This website has the latest result in 2018. There is no surprise that SAN FRANCISCO INTL SAN FRANCISCO/OAKLAND in my 1990 dataset is replaced by Denver International Airport. Others are just the same.
+
+# Appendix
+
+### The Silhouette plot and scatter plot to scale how well the clustering works
+
+```{r}
+fviz_silhouette(res.hc)
+fviz_cluster(res.hc,repel = T,geom = 'point') # scatter plot
+```
+
+### The rest clustring results
+
+```{r}
+(l2 <- res.hc$cluster[res.hc$cluster == 2])
+(l3 <- res.hc$cluster[res.hc$cluster == 3])
+```
+
+### Two clusters' Hierarchical Clustering
+
+```{r}
+res.hc <- eclust(df, "hclust",k = 2) # compute hclust
+fviz_dend(res.hc, rect = TRUE) # dendrogam
+fviz_cluster(res.hc,repel = T,geom = 'point') # scatter plot
+fviz_silhouette(res.hc) # silhouette plot
+```
+
